@@ -2,7 +2,7 @@
 vlsi.core.build_system: make
 
 # TODO: temporary
-technology.sky130.drc_blackbox_srams: true
+technology.sky130.drc_blackbox_srams: false
 technology.sky130.lvs_blackbox_srams: true
 
 # Hammer will auto-generate a CPF for simple power designs; see hammer/src/hammer-vlsi/defaults.yml for more info
@@ -114,12 +114,10 @@ vlsi.inputs:
     # "set_false_path -from reset -to system/chipyard_prcictrl_domain/clockDivider/divider_io_resetAsync_stretcher/resetout/reg_0_reg/CK"
     "set_false_path -from reset"
   ]
+  dont_use_mode: append
+  dont_use_list_meta: append
+  dont_use_list:
+    - sky130_fd_sc_hvl__*
 
 design.def.hv_routing_meta: prependlocal
 design.def.hv_routing: ofo-hv-routing.def
-
-
-vlsi.inputs.dont_use_mode: append
-vlsi.inputs.dont_use_list_meta: append
-vlsi.inputs.dont_use_list:
-  - sky130_fd_sc_hvl__*

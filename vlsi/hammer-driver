@@ -66,7 +66,7 @@ def chiptop_dont_route(x: HammerTool) -> bool:
     for net in CHIPTOP_DONT_TOUCH_NETS:
       x.append(f"set_route_attributes -nets {net} -skip_routing true")
     return True
-    
+
 def chiptop_dont_touch(x: HammerTool) -> bool:
     x.append("set_dont_touch [get_nets {%s}] true" % " ".join(CHIPTOP_DONT_TOUCH_NETS))
     return True
@@ -136,6 +136,51 @@ def write_chiptop_drc_lvs_layout(x: HammerTool) -> bool:
     ))
     return True
 
+# def write_chiptop_with_seal_ring(x: HammerTool) -> bool:
+#     # stamp the cadence provided die collateral    
+#     seal_ring_file = x.get_setting("technology.sky130.sky130_cds_die_collateral")
+
+#     map_file = get_or_else(
+#         optional_map(x.get_gds_map_file(), lambda f: "-map_file {}".format(f)),
+#         ""
+#     )
+
+#     gds_files = x.technology.read_libs([
+#         hammer_tech.filters.gds_filter
+#     ], hammer_tech.HammerTechnologyUtils.to_plain_item)
+#     if x.hierarchical_mode.is_nonleaf_hierarchical():
+#         ilm_gds = list(map(lambda ilm: ilm.gds, x.get_input_ilms()))
+#         gds_files.extend(ilm_gds)
+
+#     # ONLY DIFFERENCE FROM HAMMER'S DEFAULT WRITE GDS:
+#     gds_files.append(seal_ring_file + "/sky130_die_collateral.gds")
+
+#     merge_options = "-output_macros" if not x.get_setting("par.inputs.gds_merge") else "-uniquify_cell_names -merge {{ {} }}".format(
+#         " ".join(gds_files)
+#     )
+
+#     unit = ""
+#     if (x.get_setting("par.inputs.gds_precision_mode") == "manual"):
+#         gds_precision = x.get_setting("par.inputs.gds_precision") or ""
+#         valid_values = [100, 200, 1000, 2000, 10000, 20000]
+#         if gds_precision in valid_values:
+#             unit = "-unit %s" % gds_precision
+#         else:
+#             x.logger.error(
+#                 "par.inputs.gds_precision value of \"%s\" must be one of %s" %(
+#                     gds_precision, ', '.join([str(x) for x in valid_values])));
+#             return False
+
+#     x.verbose_append(
+#         "write_stream -mode ALL -format stream {map_file} {merge_options} {unit} {gds}".format(
+#         map_file=map_file,
+#         merge_options=merge_options,
+#         gds=x.output_gds_filename.replace(".gds", "_seal_ring.gds"),
+#         unit=unit
+#     ))
+
+#     return True
+
 def write_chiptop_netlist_with_pg_pins(x: HammerTool) -> bool:
     x.append(f"write_netlist {x.output_netlist_filename} -top_module_first -top_module ChipTop -exclude_leaf_cells -phys -flat -exclude_insts_of_cells {{ sky130_fd_sc_hd__tap_1 sky130_fd_sc_hd__tap_2 sky130_fd_sc_hd__tapvgnd_1 sky130_fd_sc_hd__tapvpwrvgnd_1 sky130_fd_sc_hd__fill_1 sky130_fd_sc_hd__fill_2 sky130_fd_sc_hd__fill_4 sky130_fd_sc_hd__fill_8 sky130_fd_sc_hd__diode_2 sky130_ef_io__connect_vcchib_vccd_and_vswitch_vddio_and_vssio_vssa_vssd_slice_20um sky130_ef_io__com_bus_slice_10um sky130_ef_io__com_bus_slice_5um sky130_ef_io__com_bus_slice_1um sky130_ef_io__com_bus_slice_20um sky130_ef_io__corner_pad sky130_ef_io__connect_vcchib_vccd_and_vswitch_vddio_and_vssio_vssa_vssd_slice_20um }}")
 
@@ -146,7 +191,6 @@ def draw_areaidld(x: HammerTool) -> bool:
     return True
 
 
-
 def check_timing_intent(x: HammerTool) -> bool:
     x.append('check_timing_intent -verbose')
     return True
@@ -155,6 +199,66 @@ def dont_touch(x: HammerTool) -> bool:
     x.append('set_dont_touch [get_db insts -if {.base_cell.base_class == block}]')
     return True
 
+def set_power_switching_activity(x: HammerTool) -> bool:
+    # do this first thing, before par automatically calls report_power and power info gets into the logs
+    if x.get_setting("vlsi.core.technology") == "hammer.technology.sky130" and \
+       x.get_setting("vlsi.core.par_tool")   == "hammer.par.innovus" :
+        x.append('''
+                set_default_switching_activity -input_activity 0.5
+                set_default_switching_activity -sequential_activity 0.5
+                ''')
+    return True
+
+def write_power_estimates(x: HammerTool) -> bool:
+    if x.get_setting("vlsi.core.technology") == "hammer.technology.sky130" and \
+       x.get_setting("vlsi.core.par_tool")   == "hammer.par.innovus" :
+        # set static power calculation
+        # for `-period` flag: Specifies the default operating period (1/frequency). It is the period that the activity is referenced to. If not specified, the software uses the dominant clock in the design. The specified period will only be applied to nets that do not have reference clock (ref_clock) associated with the net.
+        # innovus user guide pg 1428
+
+        # dynamic vectorless: uses the timing arrival window information from a static timing analysis tool to determine when instances switch. A timing arrival window describes when a signal can change within a clock cycle. An additional algorithm then determines the instances that switch.
+        x.append(
+            f"""
+            report_power -out_file power.rpt
+            set_power_output_dir {x.run_dir}/power
+            
+            report_power_domains
+            
+            # === write static min/max corners ===
+            # honor negative energy is on by default
+            set_db power_method static 
+            set_db power_write_db true 
+            set_db power_corner max
+            set_db power_report_library_usage true
+            set_db power_write_static_currents true
+            report_power -out_file static_corner-max.rpt
+            
+            set_db power_corner min
+            report_power -out_file static_corner-min.rpt
+            # may want to turn off VDD via off_pg_nets [different actual command but this is a good starting point to grep -- help * -category power]
+            
+            # === write dynamic vectorless ===
+            set_db power_method dynamic_vectorless
+            set_db power_enable_state_propagation true
+            # set_db power_report_instance_switching_list state_prop_switching_list.rpt
+            set_db power_corner min
+            set_db power_write_static_currents false
+            
+            # can set current generation method to peak or avg
+            set_db power_current_generation_method peak 
+            
+            # if true, control signals will be ignored when propagating activity
+            set_db power_ignore_control_signals true
+            
+            report_power -out_file dynamic_vectorless_corner-min_current-gen-peak_no-ignore-ctrl-sigs.rpt
+            
+            set_db power_corner max
+            report_power -out_file dynamic_vectorless_corner-max_current-gen-peak_no-ignore-ctrl-sigs.rpt
+            
+            set_db power_method static
+        """
+        )
+    return True
 
 def derate_srams(x: HammerTool) -> bool:
     if x.get_setting("vlsi.core.technology") == "hammer.technology.sky130" and \
@@ -319,12 +423,6 @@ route_special -connect floating_stripe -floating_stripe_target ring -nets {VDD V
 ''')
     return True
 
-def ignore_por_timing(x: HammerTool) -> bool:
-    x.append("""
-        set_false_path -from jtag_TCK -to clock_gating_default
-    """)
-    return True
-
 class Driver(CLIDriver):
     def get_extra_synthesis_hooks(self) -> List[HammerToolHookAction]:
         return [
@@ -341,46 +439,42 @@ class Driver(CLIDriver):
     def get_extra_par_hooks(self) -> List[HammerToolHookAction]:
         return [
             # HammerTool.make_persistent_hook(add_ofo_srams),
+            HammerTool.make_persistent_hook(set_power_switching_activity), # set the default switching activity
             HammerTool.make_removal_hook("place_bumps"),
             HammerTool.make_post_insertion_hook("place_pins", assign_chiptop_io_pins),
             HammerTool.make_pre_insertion_hook("place_pins", connect_core_stripes),
             HammerTool.make_removal_hook("place_pins"),
-
             HammerTool.make_pre_insertion_hook("place_opt_design", derate_srams),
-
             # move fillers step to after opt_design
-            # HammerTool.make_pre_insertion_hook("opt_design", ignore_por_timing), # ignore POR
             HammerTool.make_removal_hook("add_fillers"),
             HammerTool.make_post_insertion_hook("opt_design", add_fillers),
-
             # add final signoff timing
             # TODO: re-add once we care about timing (DRC/LVS sane)
             # HammerTool.make_pre_insertion_hook("write_design", signoff_timing),
-
             # # write final files
             # HammerTool.make_post_insertion_hook("write_design", write_top_files),
-
-            HammerTool.make_pre_insertion_hook("floorplan_design", set_die_snap_to_mfg_grid),
+            HammerTool.make_pre_insertion_hook(
+                "floorplan_design", set_die_snap_to_mfg_grid
+            ),
             # HammerTool.make_pre_insertion_hook("floorplan_design", chiptop_dont_route),
             # HammerTool.make_pre_insertion_hook("floorplan_design", chiptop_dont_touch),
+            HammerTool.make_post_insertion_hook("floorplan_design", write_power_estimates),
             HammerTool.make_post_insertion_hook("floorplan_design", efabless_ring_io),
-            #HammerTool.make_post_insertion_hook("floorplan_design", floorplan_sram_macros),
+            # HammerTool.make_post_insertion_hook("floorplan_design", floorplan_sram_macros),
             HammerTool.make_post_insertion_hook("efabless_ring_io", load_hv_def_routing),
-            #HammerTool.make_pre_insertion_hook("power_straps", pll_power),
-
+            # HammerTool.make_pre_insertion_hook("power_straps", pll_power),
             HammerTool.make_pre_insertion_hook("write_design", force_bias_pins_nets),
             HammerTool.make_pre_insertion_hook("write_design", draw_areaidld),
-            #HammerTool.make_pre_insertion_hook("write_design", ofo_manual_edits),
+            # HammerTool.make_pre_insertion_hook("write_design", ofo_manual_edits),
             HammerTool.make_post_insertion_hook("write_design", write_chiptop_netlist_with_pg_pins),
             HammerTool.make_post_insertion_hook("write_design", write_chiptop_drc_lvs_layout),
-
+            # HammerTool.make_post_insertion_hook("write_design", write_chiptop_with_seal_ring),
             HammerTool.make_post_insertion_hook("sky130_innovus_settings", enable_clock_antenna_insertion),
-
             # Not needed with manual CPF flow
             HammerTool.make_removal_hook("sky130_connect_nets"),
             HammerTool.make_removal_hook("sky130_connect_nets2"),
         ]
-    
+
     def get_extra_drc_hooks(self) -> List[HammerToolHookAction]:
         return []
         # TODO: these are calibre specific, pegasus doesn't have this step name
