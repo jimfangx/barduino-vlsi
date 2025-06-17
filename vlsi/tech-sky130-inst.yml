@@ -21,7 +21,7 @@ technology.sky130:
   sky130_cds: "/scratch/ee198-20-aaf/sky130_col/sky130_release_0.0.7"
   # seal ring layout and layouts for creating a die ID
   sky130_cds_die_collateral: "/scratch/ee198-20-aaf/sky130_col/sky130_die_collateral_1.0"
-  sky130_drc_decks: [
+  drc_deck_sources: [
     "$SKY130_CDS/Sky130_DRC/sky130_rev_0.0_2.6.drc.pvl",
   ]
   stdcell_library: "sky130_scl"
