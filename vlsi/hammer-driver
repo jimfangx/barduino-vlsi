@@ -62,6 +62,33 @@ CHIPTOP_IO_NETS = [
 
 CHIPTOP_DONT_TOUCH_NETS = ["_commonIO_AMUXBUS_A_wire", "_commonIO_AMUXBUS_B_wire"]
 
+def syn_design_effort(x: HammerTool) -> bool:
+    # See: Genus Attribute Reference 21.1 - Specifies the global effort to use for all synthesis commands. By default (attribute is set to none)
+    x.append(
+    """
+    set_db syn_global_effort high
+    """
+    )
+    return True
+
+
+# this is in STAC but last time all 3 of these options were used, it created some DRC issues
+# so we are not using it for now
+# Hammer flow defaults:
+# design_cong_effort: not used
+# place_global_confg_effort: high
+# design_flow_effort: standard
+def par_design_effort(x: HammerTool) -> bool:
+    x.append(
+    """
+    set_db design_cong_effort high
+    set_db place_global_cong_effort high
+    set_db design_flow_effort extreme
+    """
+    )
+    return True
+
+
 def chiptop_dont_route(x: HammerTool) -> bool:
     for net in CHIPTOP_DONT_TOUCH_NETS:
       x.append(f"set_route_attributes -nets {net} -skip_routing true")
@@ -69,21 +96,6 @@ def chiptop_dont_route(x: HammerTool) -> bool:
 
 def chiptop_dont_touch(x: HammerTool) -> bool:
     x.append("set_dont_touch [get_nets {%s}] true" % " ".join(CHIPTOP_DONT_TOUCH_NETS))
-    return True
-
-def add_ofo_srams(x: HammerTool) -> bool:
-    # this isn't added since sram compiler doesn't know about the 151 blackbox core srams
-    sram22_path = x.get_setting("technology.sky130.sram22_sky130_macros")
-    for sram_name in ["sram22_64x32m4w8",  "sram22_256x32m4w8"]:
-        corners = [["-40C","1.95","_ff_n40C_1v95.lib", "fast"] ,["100C","1.60","_ss_100C_1v60.lib", "slow"], ["025C","1.80","_tt_025C_1v80.lib", "typical"]]
-        for temp, vdd, postfix, speed in corners:
-            x.technology.config.libraries.append(
-                    hammer_tech.Library(name="151 sram", 
-                                        corner=hammer_tech.Corner(temperature=temp,nmos=speed, pmos=speed),
-                                        supplies=hammer_tech.Supplies(GND="0v", VDD=vdd),
-                                        nldm_liberty_file=f"{sram22_path}/{sram_name}/{sram_name}{postfix}",
-                                        lef_file=f"{sram22_path}/{sram_name}/{sram_name}.lef",
-                                        gds_file= f"{sram22_path}/{sram_name}/{sram_name}.gds"))
     return True
 
 def assign_chiptop_io_pins(x: HammerTool) -> bool:
@@ -136,51 +148,6 @@ def write_chiptop_drc_lvs_layout(x: HammerTool) -> bool:
     ))
     return True
 
-# def write_chiptop_with_seal_ring(x: HammerTool) -> bool:
-#     # stamp the cadence provided die collateral    
-#     seal_ring_file = x.get_setting("technology.sky130.sky130_cds_die_collateral")
-
-#     map_file = get_or_else(
-#         optional_map(x.get_gds_map_file(), lambda f: "-map_file {}".format(f)),
-#         ""
-#     )
-
-#     gds_files = x.technology.read_libs([
-#         hammer_tech.filters.gds_filter
-#     ], hammer_tech.HammerTechnologyUtils.to_plain_item)
-#     if x.hierarchical_mode.is_nonleaf_hierarchical():
-#         ilm_gds = list(map(lambda ilm: ilm.gds, x.get_input_ilms()))
-#         gds_files.extend(ilm_gds)
-
-#     # ONLY DIFFERENCE FROM HAMMER'S DEFAULT WRITE GDS:
-#     gds_files.append(seal_ring_file + "/sky130_die_collateral.gds")
-
-#     merge_options = "-output_macros" if not x.get_setting("par.inputs.gds_merge") else "-uniquify_cell_names -merge {{ {} }}".format(
-#         " ".join(gds_files)
-#     )
-
-#     unit = ""
-#     if (x.get_setting("par.inputs.gds_precision_mode") == "manual"):
-#         gds_precision = x.get_setting("par.inputs.gds_precision") or ""
-#         valid_values = [100, 200, 1000, 2000, 10000, 20000]
-#         if gds_precision in valid_values:
-#             unit = "-unit %s" % gds_precision
-#         else:
-#             x.logger.error(
-#                 "par.inputs.gds_precision value of \"%s\" must be one of %s" %(
-#                     gds_precision, ', '.join([str(x) for x in valid_values])));
-#             return False
-
-#     x.verbose_append(
-#         "write_stream -mode ALL -format stream {map_file} {merge_options} {unit} {gds}".format(
-#         map_file=map_file,
-#         merge_options=merge_options,
-#         gds=x.output_gds_filename.replace(".gds", "_seal_ring.gds"),
-#         unit=unit
-#     ))
-
-#     return True
-
 def write_chiptop_netlist_with_pg_pins(x: HammerTool) -> bool:
     x.append(f"write_netlist {x.output_netlist_filename} -top_module_first -top_module ChipTop -exclude_leaf_cells -phys -flat -exclude_insts_of_cells {{ sky130_fd_sc_hd__tap_1 sky130_fd_sc_hd__tap_2 sky130_fd_sc_hd__tapvgnd_1 sky130_fd_sc_hd__tapvpwrvgnd_1 sky130_fd_sc_hd__fill_1 sky130_fd_sc_hd__fill_2 sky130_fd_sc_hd__fill_4 sky130_fd_sc_hd__fill_8 sky130_fd_sc_hd__diode_2 sky130_ef_io__connect_vcchib_vccd_and_vswitch_vddio_and_vssio_vssa_vssd_slice_20um sky130_ef_io__com_bus_slice_10um sky130_ef_io__com_bus_slice_5um sky130_ef_io__com_bus_slice_1um sky130_ef_io__com_bus_slice_20um sky130_ef_io__corner_pad sky130_ef_io__connect_vcchib_vccd_and_vswitch_vddio_and_vssio_vssa_vssd_slice_20um }}")
 
@@ -188,6 +155,19 @@ def write_chiptop_netlist_with_pg_pins(x: HammerTool) -> bool:
 
 def draw_areaidld(x: HammerTool) -> bool:
     x.append("create_shape -layer AREAIDLD -rect [get_db designs .core_bbox]")
+    return True
+
+def eco_changes(x: HammerTool) -> bool:
+    # This is a place for ECO changes that are not in the original design
+    # For example, if you want to change the size of a cell, you can do it here
+    # or if you want to add a new cell, you can do it here
+    # This is a place for manual changes that are not in the original design
+    
+    # in order to prevent DRC (metal spacing) violations at the SRAM ports when lowest routing layer is Met2 because by default, Vias will be stamped on top of ports (on M1) from Met1 -> Met2, which creates metal spacing violations between the vias on the ports - more details: https://ucb-bar.slack.com/archives/C04BT3QEW4C/p1751308674571229
+    x.append("""
+            set_db design_bottom_routing_layer met1
+            route_eco -fix_drc -layer_range 1:2
+            """)
     return True
 
 
@@ -261,15 +241,29 @@ def write_power_estimates(x: HammerTool) -> bool:
     return True
 
 def derate_srams(x: HammerTool) -> bool:
+    if x.get_setting("vlsi.core.technology") == "hammer.technology.sky130" and x.get_setting("vlsi.core.par_tool") == "hammer.par.innovus" :
+    # delays from STACv2: https://github.com/ucb-bar/stac-top/blob/2702197ccbf126e2d9a02abfa0c2a20f61d9cec2/vlsi/hammer-driver#L336-L343
+        x.append(f'''
+            set_timing_derate -cell_delay -delay_corner [get_db delay_corners *.setup_delay] -late 1.2 [get_db insts -if {{.base_cell.name == *sram22*}}]
+            set_timing_derate -cell_delay -delay_corner [get_db delay_corners *.hold_delay] -late 0.9 [get_db insts -if {{.base_cell.name == *sram22*}}]
+        ''')
+    return True
+
+def set_routing_layers(x: HammerTool) -> bool:
     if x.get_setting("vlsi.core.technology") == "hammer.technology.sky130" and \
        x.get_setting("vlsi.core.par_tool")   == "hammer.par.innovus" :
-        # TODO: Derate necessary macros
-        macros = []
-        for macro in macros:
-            x.append(f'''
-set_timing_derate -cell_delay -delay_corner [get_db delay_corners *.setup_delay] -late 3.0 [get_db insts -if {{.base_cell.name == {macro}}}]
-set_timing_derate -cell_delay -delay_corner [get_db delay_corners *.hold_delay] -late 0.95 [get_db insts -if {{.base_cell.name == {macro}}}]
-''')
+        # set global routing layers
+        
+        # OLD: setting to met1 caused too much congestion - 8/2/2025 jim
+        # "cadence stdcells use met1 for routing and innovus would blow up trying to use it for global routing" - elam @ https://ucb-bar.slack.com/archives/C04BT3QEW4C/p1751308787319609?thread_ts=1751308674.571229&cid=C04BT3QEW4C
+        # set_db design_bottom_routing_layer met1
+        # set_db design_top_routing_layer met5
+        
+        # we use met2 as the most bottom global routing layer
+        x.append("""
+            set_db design_bottom_routing_layer met2
+            set_db design_top_routing_layer met5
+        """)
     return True
 
 def enable_clock_antenna_insertion(x: HammerTool) -> bool:
@@ -277,11 +271,27 @@ def enable_clock_antenna_insertion(x: HammerTool) -> bool:
     return True
 
 def add_fillers(x: HammerTool) -> bool:
-    if x.get_setting("vlsi.core.technology") == "hammer.technology.sky130" and \
-       x.get_setting("vlsi.core.par_tool")   == "hammer.par.innovus" :
-        x.add_fillers()  # call Innovus's add_fillers step
-        # x.append("opt_design -post_route -setup -hold")
-        # x.append("opt_design -post_route -hold")
+    if x.get_setting("vlsi.core.technology") == "hammer.technology.sky130" and x.get_setting("vlsi.core.par_tool") == "hammer.par.innovus" :
+        # x.add_fillers()  # call Innovus's default add_fillers step -- this was the old solution
+    
+        # gone due to https://canary.discord.com/channels/1166509154169520268/1356748669503803455/1403560846474346566
+        # TLDR: FILL1 next to decap-fillers near the SRAM halo causes DRC violations (MR: Width of nwell: 0.84 um) as decap fillers extend into FILL1 - as a temp patch we fill with DECAP 16 in area of chip that is not near the SRAMs, then only use non-decap fills to fill in the rest of the gaps
+        # we use DECAL16 only so that we don't exceed density + we enforce a density % target
+        x.append('''
+set_db add_fillers_cells "FILL_DECAP8 FILL_DECAP16 FILL1 FILL2 FILL4 FILL8 FILL16"
+add_fillers -base_cells "FILL_DECAP16" -area "263 3415 3341 4936" -density 0.1
+add_fillers -base_cells "FILL_DECAP16" -area "1512 300 3318 3500" -density 0.15
+add_fillers -base_cells "FILL_DECAP16" -area "1010 300 1521 3024" -density 0.2
+add_fillers -base_cells "FILL_DECAP16" -area "264 300 1030 819" -density 0.2
+add_fillers -base_cells "FILL_DECAP16" -area "272 820 444 3455"
+add_fillers -base_cells "FILL_DECAP16" -area "743 3090 1189 3394"
+add_fillers -base_cells "FILL_DECAP16" -area "62 300 3541 600" -density 0.15
+add_fillers -base_cells "FILL_DECAP16" -area "2818 660 3480 5033" -density 0.15
+add_fillers -base_cells "FILL_DECAP16" -area "62 4372 2500 5082" -density 0.15
+add_fillers -base_cells "FILL_DECAP16" -area "62 3380 772 4261" -density 0.15
+set_db add_fillers_cells "FILL1 FILL2 FILL4 FILL8 FILL16"
+add_fillers
+        ''')
     return True
 
 def signoff_timing(x: HammerTool) -> bool:
@@ -431,45 +441,51 @@ class Driver(CLIDriver):
             HammerTool.make_post_insertion_hook("init_environment", donttouch_iocells),
             HammerTool.make_pre_insertion_hook("syn_generic", derate_srams),
             HammerTool.make_pre_insertion_hook("syn_generic", flatten_analog_driver),
-            # HammerTool.make_pre_insertion_hook("syn_generic", chiptop_dont_touch),
-            # manually include the LEFs for the srams used by the 151 core since sram_compiler doesn't know about them
-            # HammerTool.make_persistent_hook(add_ofo_srams),
+            # HammerTool.make_pre_insertion_hook("syn_generic", chiptop_dont_touch), # we dont use _commonIO_AMUXBUS_A_wire, _commonIO_AMUXBUS_B_wire in Barduino design itself (only in IO ring, which isn't added until during par), so commenting this hook out 
+                        
+            HammerTool.make_pre_insertion_hook("syn_generic", syn_design_effort),
         ]
 
     def get_extra_par_hooks(self) -> List[HammerToolHookAction]:
         return [
-            # HammerTool.make_persistent_hook(add_ofo_srams),
-            HammerTool.make_persistent_hook(set_power_switching_activity), # set the default switching activity
+            # HammerTool.make_persistent_hook(set_power_switching_activity), # set the default switching activity -- we aren't worried about power reports yet -- 8/21/2025, jim -- this was mainly for TVIP a while back when they wanted some PPA estimates
+            
             HammerTool.make_removal_hook("place_bumps"),
             HammerTool.make_post_insertion_hook("place_pins", assign_chiptop_io_pins),
-            HammerTool.make_pre_insertion_hook("place_pins", connect_core_stripes),
             HammerTool.make_removal_hook("place_pins"),
+            
             HammerTool.make_pre_insertion_hook("place_opt_design", derate_srams),
+            
+            HammerTool.make_post_insertion_hook("init_design", set_routing_layers),
+            
             # move fillers step to after opt_design
             HammerTool.make_removal_hook("add_fillers"),
             HammerTool.make_post_insertion_hook("opt_design", add_fillers),
-            # add final signoff timing
-            # TODO: re-add once we care about timing (DRC/LVS sane)
-            # HammerTool.make_pre_insertion_hook("write_design", signoff_timing),
+            
             # # write final files
             # HammerTool.make_post_insertion_hook("write_design", write_top_files),
-            HammerTool.make_pre_insertion_hook(
-                "floorplan_design", set_die_snap_to_mfg_grid
-            ),
-            # HammerTool.make_pre_insertion_hook("floorplan_design", chiptop_dont_route),
-            # HammerTool.make_pre_insertion_hook("floorplan_design", chiptop_dont_touch),
-            HammerTool.make_post_insertion_hook("floorplan_design", write_power_estimates),
+            
+            # HammerTool.make_pre_insertion_hook("floorplan_design", par_design_effort), # see comments in par_design_effort() for why this is not used
+            HammerTool.make_pre_insertion_hook("floorplan_design", set_die_snap_to_mfg_grid),
+            HammerTool.make_pre_insertion_hook("floorplan_design", chiptop_dont_route), # _commonIO_AMUXBUS_A_wire, _commonIO_AMUXBUS_B_wire are in IO cells - so we dont route them before efabless_ring_io
+            HammerTool.make_pre_insertion_hook("floorplan_design", chiptop_dont_touch), # _commonIO_AMUXBUS_A_wire, _commonIO_AMUXBUS_B_wire are in IO cells - so we dont route them before efabless_ring_io
+            # HammerTool.make_post_insertion_hook("floorplan_design", write_power_estimates), # no proper power reports needed for barduino as of 8/21/2025, jim
             HammerTool.make_post_insertion_hook("floorplan_design", efabless_ring_io),
-            # HammerTool.make_post_insertion_hook("floorplan_design", floorplan_sram_macros),
+            # HammerTool.make_post_insertion_hook("floorplan_design", floorplan_sram_macros), # sram placement handled by design-ofo.yaml, elaborated tcl in floorplan.tcl
             HammerTool.make_post_insertion_hook("efabless_ring_io", load_hv_def_routing),
-            # HammerTool.make_pre_insertion_hook("power_straps", pll_power),
+            HammerTool.make_post_insertion_hook("power_straps", connect_core_stripes),
+            
             HammerTool.make_pre_insertion_hook("write_design", force_bias_pins_nets),
             HammerTool.make_pre_insertion_hook("write_design", draw_areaidld),
-            # HammerTool.make_pre_insertion_hook("write_design", ofo_manual_edits),
+            HammerTool.make_pre_insertion_hook("write_design", eco_changes),
             HammerTool.make_post_insertion_hook("write_design", write_chiptop_netlist_with_pg_pins),
             HammerTool.make_post_insertion_hook("write_design", write_chiptop_drc_lvs_layout),
-            # HammerTool.make_post_insertion_hook("write_design", write_chiptop_with_seal_ring),
+            # add final signoff timing
+            # TODO: re-add once we care about timing (DRC/LVS sane)
+            HammerTool.make_pre_insertion_hook("write_design", signoff_timing),
+            
             HammerTool.make_post_insertion_hook("sky130_innovus_settings", enable_clock_antenna_insertion),
+            
             # Not needed with manual CPF flow
             HammerTool.make_removal_hook("sky130_connect_nets"),
             HammerTool.make_removal_hook("sky130_connect_nets2"),
@@ -480,14 +496,14 @@ class Driver(CLIDriver):
         # TODO: these are calibre specific, pegasus doesn't have this step name
         return [
             HammerTool.make_pre_insertion_hook("generate_drc_run_file", use_drc_lvs_gds),
-            HammerTool.make_post_insertion_hook("generate_drc_run_file", drc_blackboxes)
+            # HammerTool.make_post_insertion_hook("generate_drc_run_file", drc_blackboxes)
         ]
     def get_extra_lvs_hooks(self) -> List[HammerToolHookAction]:
         # TODO: these are calibre specific, pegasus doesn't have this step name
         return []
         return [
             HammerTool.make_pre_insertion_hook("generate_lvs_run_file", use_drc_lvs_gds),
-            HammerTool.make_post_insertion_hook("generate_lvs_run_file", lvs_blackboxes)
+            # HammerTool.make_post_insertion_hook("generate_lvs_run_file", lvs_blackboxes)
         ]
 
 if __name__ == '__main__':
